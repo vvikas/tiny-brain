@@ -3,32 +3,30 @@ games/tictactoe/train.py
 
 Train the TicTacToe agent using REINFORCE (policy gradient).
 
+Key improvements over the naive version:
+  1. Perspective-flipped board: agent always receives its own pieces as +1
+     and opponent's as -1, regardless of whether it's playing as X or O.
+     This means one set of weights works for both roles.
+  2. Tactical reward shaping: extra reward/penalty when the agent correctly
+     or incorrectly handles an immediate win or block opportunity.
+     REINFORCE's sparse end-game reward alone struggles to teach tactics.
+  3. Phase 1 alternates X/O: agent trains as both X and O vs random.
+  4. More episodes: 10 000 vs random + 20 000 self-play.
+
 How REINFORCE works:
-  - Play a full game (an "episode"), collecting (log_prob, reward) pairs
-    for every move the agent made.
+  - Play a full game, collecting (log_prob, reward) pairs for every agent move.
   - At the end, assign the game outcome as reward (+1 win, -1 loss, 0 draw).
-  - loss = -sum(log_prob * advantage)  where advantage = reward - baseline
-  - loss.backward() flows gradients all the way through the network.
-  - SGD update: nudge weights in the direction that makes winning moves
-    more likely and losing moves less likely.
-
-Why a baseline?
-  Without a baseline, REINFORCE has very high variance — the gradient
-  estimates are noisy and training is slow. Subtracting the running
-  average reward ("advantage = reward - mean_reward") doesn't change
-  the expected gradient but dramatically reduces variance.
-
-Training phases:
-  Phase 1 (vs random)  : Agent (X) plays random opponent (O).
-                         Gives a clear win-signal early on.
-  Phase 2 (self-play)  : Two separate agents play each other.
-                         Forces learning of counter-strategies.
+  - Add a tactical shaping bonus/penalty to each step.
+  - loss = -sum(log_prob * (reward + shaping - baseline))
+  - loss.backward() flows gradients through the network.
+  - SGD nudges weights to make winning (and tactically correct) moves more likely.
 """
 
 import random
 import sys
 import os
 import time
+import copy
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
@@ -39,22 +37,78 @@ from games.tictactoe.agent import NNAgent
 AGENT_SAVE_PATH = os.path.join(os.path.dirname(__file__), 'agent.pkl')
 
 
-def play_episode_vs_random(agent, game, lr, mean_reward):
+# ── Tactical helpers ──────────────────────────────────────────────────────── #
+
+_WIN_LINES = [
+    [0, 1, 2], [3, 4, 5], [6, 7, 8],   # rows
+    [0, 3, 6], [1, 4, 7], [2, 5, 8],   # columns
+    [0, 4, 8], [2, 4, 6],              # diagonals
+]
+
+
+def _immediate_win(board, valid_moves, player):
+    """Return a move that wins immediately for `player`, or None."""
+    for m in valid_moves:
+        test = list(board)
+        test[m] = player
+        if any(all(test[i] == player for i in line) for line in _WIN_LINES):
+            return m
+    return None
+
+
+def _tactical_shaping(board, valid_moves, player, chosen):
     """
-    One episode: agent (X=1) vs random opponent (O=-1).
+    Extra reward/penalty for tactical win/block decisions.
+
+    Provides dense reward signal so the agent learns to:
+      - Always take an immediate win (+0.5 if correct, -0.6 if missed)
+      - Always block an opponent's immediate win (+0.3 if blocked, -0.5 if missed)
+
+    These bonuses are added on top of the game-end reward before backprop.
+    """
+    win_move = _immediate_win(board, valid_moves, player)
+    if win_move is not None:
+        return 0.5 if chosen == win_move else -0.6
+
+    block_move = _immediate_win(board, valid_moves, -player)
+    if block_move is not None:
+        return 0.3 if chosen == block_move else -0.5
+
+    return 0.0
+
+
+def board_perspective(board, player):
+    """
+    Return the board from `player`'s point of view:
+        own pieces  → +1
+        opponent    → -1
+        empty       →  0
+
+    This lets a single set of weights serve both X and O roles.
+    """
+    return [float(c * player) for c in board]
+
+
+# ── Episode functions ─────────────────────────────────────────────────────── #
+
+def play_episode_vs_random(agent, game, lr, mean_reward, agent_player=1):
+    """
+    One episode: agent plays as `agent_player` vs a random opponent.
+    Uses perspective-flipped board so agent always sees itself as player 1.
     Returns (reward, updated_mean_reward).
     """
     game.reset()
-    trajectory = []   # list of (log_prob Value, reward placeholder)
+    trajectory = []   # list of [log_prob Value, final_reward, tactical_shaping]
 
     while True:
-        state = game.get_state()
         valid = game.get_valid_moves()
 
-        if game.current_player == 1:
-            # Agent's turn — track log_prob for REINFORCE
-            action, log_prob = agent.select_action(state, valid, training=True)
-            trajectory.append([log_prob, None])
+        if game.current_player == agent_player:
+            # Give agent its own perspective: own = +1, opp = -1
+            persp = board_perspective(game.board, agent_player)
+            action, log_prob = agent.select_action(persp, valid, training=True)
+            shaping = _tactical_shaping(game.board, valid, agent_player, action)
+            trajectory.append([log_prob, None, shaping])
         else:
             # Random opponent — no gradient needed
             action = random.choice(valid)
@@ -62,12 +116,10 @@ def play_episode_vs_random(agent, game, lr, mean_reward):
         result = game.make_move(action)
 
         if result != 'ongoing':
-            # Assign reward from agent's (X=1) perspective
             if result == 'win':
-                reward = 1.0 if game.current_player == 1 else -1.0
+                reward = 1.0 if game.current_player == agent_player else -1.0
             else:
                 reward = 0.0
-
             for step in trajectory:
                 step[1] = reward
             break
@@ -76,12 +128,12 @@ def play_episode_vs_random(agent, game, lr, mean_reward):
     alpha = 0.05
     mean_reward = (1 - alpha) * mean_reward + alpha * reward
 
-    # REINFORCE update
+    # REINFORCE update with tactical shaping
     if trajectory:
         agent.mlp.zero_grad()
         loss = sum(
-            -lp * (r - mean_reward)
-            for lp, r in trajectory
+            -lp * (r + shaping - mean_reward)
+            for lp, r, shaping in trajectory
             if r is not None
         )
         loss.backward()
@@ -93,22 +145,26 @@ def play_episode_vs_random(agent, game, lr, mean_reward):
 
 def play_episode_self_play(agent_x, agent_o, game, lr_x, lr_o, mean_x, mean_o):
     """
-    One self-play episode: agent_x (X) vs agent_o (O).
+    One self-play episode: agent_x (X=1) vs agent_o (O=-1).
+    Both agents receive the board from their own perspective.
     Returns (reward_x, reward_o, updated means).
     """
     game.reset()
     traj_x, traj_o = [], []
 
     while True:
-        state = game.get_state()
         valid = game.get_valid_moves()
 
         if game.current_player == 1:
-            action, log_prob = agent_x.select_action(state, valid, training=True)
-            traj_x.append([log_prob, None])
+            persp = board_perspective(game.board, 1)    # X's view: no sign change
+            action, log_prob = agent_x.select_action(persp, valid, training=True)
+            shaping = _tactical_shaping(game.board, valid, 1, action)
+            traj_x.append([log_prob, None, shaping])
         else:
-            action, log_prob = agent_o.select_action(state, valid, training=True)
-            traj_o.append([log_prob, None])
+            persp = board_perspective(game.board, -1)   # O's view: flip signs
+            action, log_prob = agent_o.select_action(persp, valid, training=True)
+            shaping = _tactical_shaping(game.board, valid, -1, action)
+            traj_o.append([log_prob, None, shaping])
 
         result = game.make_move(action)
 
@@ -133,7 +189,7 @@ def play_episode_self_play(agent_x, agent_o, game, lr_x, lr_o, mean_x, mean_o):
     def update(agent, traj, mean, lr):
         if traj:
             agent.mlp.zero_grad()
-            loss = sum(-lp * (r - mean) for lp, r in traj if r is not None)
+            loss = sum(-lp * (r + shaping - mean) for lp, r, shaping in traj if r is not None)
             loss.backward()
             for p in agent.mlp.parameters():
                 p.data -= lr * p.grad
@@ -144,23 +200,29 @@ def play_episode_self_play(agent_x, agent_o, game, lr_x, lr_o, mean_x, mean_o):
     return reward_x, reward_o, mean_x, mean_o
 
 
+# ── Evaluation ────────────────────────────────────────────────────────────── #
+
 def eval_vs_random(agent, n_games=200):
-    """Measure agent win/draw/loss rates against a random opponent."""
+    """
+    Measure agent win/draw/loss rates against a random opponent.
+    Alternates playing as X and O so we test both roles equally.
+    """
     game = TicTacToe()
     wins = draws = losses = 0
-    for _ in range(n_games):
+    for ep in range(n_games):
         game.reset()
+        agent_player = 1 if (ep % 2 == 0) else -1
         while True:
-            state = game.get_state()
             valid = game.get_valid_moves()
-            if game.current_player == 1:
-                action, _ = agent.select_action(state, valid, training=False)
+            if game.current_player == agent_player:
+                persp = board_perspective(game.board, agent_player)
+                action, _ = agent.select_action(persp, valid, training=False)
             else:
                 action = random.choice(valid)
             result = game.make_move(action)
             if result != 'ongoing':
                 if result == 'win':
-                    if game.current_player == 1:
+                    if game.current_player == agent_player:
                         wins += 1
                     else:
                         losses += 1
@@ -170,9 +232,11 @@ def eval_vs_random(agent, n_games=200):
     return wins / n_games, draws / n_games, losses / n_games
 
 
+# ── Main training loop ────────────────────────────────────────────────────── #
+
 def train(
-    phase1_episodes=5000,
-    phase2_episodes=10000,
+    phase1_episodes=10000,
+    phase2_episodes=20000,
     lr=0.01,
     eval_every=1000,
     save_path=AGENT_SAVE_PATH,
@@ -180,9 +244,10 @@ def train(
     print("=" * 60)
     print("tiny-brain TicTacToe — REINFORCE Training")
     print("=" * 60)
-    print(f"Phase 1: {phase1_episodes} episodes vs random opponent")
+    print(f"Phase 1: {phase1_episodes} episodes vs random (alternates X/O)")
     print(f"Phase 2: {phase2_episodes} episodes of self-play")
     print(f"Learning rate: {lr}")
+    print("Enhancements: perspective-flipped board + tactical reward shaping")
     print()
 
     agent = NNAgent()
@@ -191,11 +256,15 @@ def train(
     win_history = []
 
     # ── Phase 1: vs random ────────────────────────────────────────────── #
-    print("Phase 1: Training vs random opponent...")
+    print("Phase 1: Training vs random opponent (alternating X and O)...")
     t0 = time.time()
 
     for ep in range(1, phase1_episodes + 1):
-        reward, mean_reward = play_episode_vs_random(agent, game, lr, mean_reward)
+        # Alternate: odd episodes as X, even episodes as O
+        agent_player = 1 if (ep % 2 == 1) else -1
+        reward, mean_reward = play_episode_vs_random(
+            agent, game, lr, mean_reward, agent_player
+        )
         win_history.append(1 if reward > 0 else 0)
 
         if ep % eval_every == 0:
@@ -212,11 +281,7 @@ def train(
     print()
 
     # ── Phase 2: self-play ─────────────────────────────────────────────── #
-    print("Phase 2: Self-play training...")
-    # Start with a copy of the phase-1 agent as opponent
-    agent_o = NNAgent()
-    agent_o.mlp = agent.mlp   # share weights initially, they'll diverge
-    import copy
+    print("Phase 2: Self-play training (both agents use perspective flip)...")
     agent_o = copy.deepcopy(agent)
 
     mean_x = mean_o = 0.0
@@ -227,7 +292,7 @@ def train(
             agent, agent_o, game, lr, lr, mean_x, mean_o
         )
 
-        # Periodically replace the weaker agent with the stronger one
+        # Periodically update the opponent with the latest weights
         if ep % 2000 == 0:
             agent_o = copy.deepcopy(agent)
 

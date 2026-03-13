@@ -69,11 +69,17 @@ def ai_move():
     """Make one AI move and return (result, action, brain_before_move).
     Brain state is captured BEFORE placing so it shows what the AI evaluated
     when making its decision (not what it thinks about the human's next turn).
+
+    The board is passed from the AI's perspective (own pieces = +1, opponent = -1)
+    to match how the agent was trained (perspective-flipped inputs).
     """
-    state = game.get_state()
+    current = game.current_player
+    state_abs = game.get_state()          # absolute: 1=X, -1=O
     valid = game.get_valid_moves()
-    brain_before = agent.get_brain_state(state, valid)
-    action, _ = agent.select_action(state, valid, training=False)
+    # Flip to agent's own perspective so it sees itself as "player 1"
+    state_persp = [s * current for s in state_abs]
+    brain_before = agent.get_brain_state(state_persp, valid)
+    action, _ = agent.select_action(state_persp, valid, training=False)
     result = game.make_move(action)
     return result, action, brain_before
 
