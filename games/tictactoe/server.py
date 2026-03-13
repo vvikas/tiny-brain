@@ -49,16 +49,14 @@ human_player = -1
 
 # ── Helper ────────────────────────────────────────────────────────────── #
 
-def game_response(extra=None):
-    """Build the standard JSON response with board + brain state."""
-    state = game.get_state()
-    valid = game.get_valid_moves()
-    brain = agent.get_brain_state(state, valid)
-
+def game_response(brain=None, extra=None):
+    """Build the standard JSON response with board state.
+    brain is passed explicitly — None when it's the human's turn (clears heatmap).
+    """
     payload = {
         "board":          game.board,
         "current_player": game.current_player,
-        "valid_moves":    valid,
+        "valid_moves":    game.get_valid_moves(),
         "brain":          brain,
         "human_player":   human_player,
     }
@@ -68,12 +66,16 @@ def game_response(extra=None):
 
 
 def ai_move():
-    """Make one AI move and return (result, ai_action)."""
+    """Make one AI move and return (result, action, brain_before_move).
+    Brain state is captured BEFORE placing so it shows what the AI evaluated
+    when making its decision (not what it thinks about the human's next turn).
+    """
     state = game.get_state()
     valid = game.get_valid_moves()
+    brain_before = agent.get_brain_state(state, valid)
     action, _ = agent.select_action(state, valid, training=False)
     result = game.make_move(action)
-    return result, action
+    return result, action, brain_before
 
 
 # ── Routes ────────────────────────────────────────────────────────────── #
@@ -93,11 +95,11 @@ def new_game():
 
     if human_player == -1:
         # AI (X=1) plays first
-        result, action = ai_move()
-        return game_response({"result": result, "ai_move": action})
+        result, action, brain_before = ai_move()
+        return game_response(brain=brain_before, extra={"result": result, "ai_move": action})
     else:
-        # Human (X=1) plays first — board is empty, human's turn
-        return game_response({"result": "ongoing", "ai_move": None})
+        # Human (X=1) plays first — board is empty, no brain yet
+        return game_response(brain=None, extra={"result": "ongoing", "ai_move": None})
 
 
 @app.route('/api/move', methods=['POST'])
@@ -115,15 +117,15 @@ def move():
     result = game.make_move(pos)
     if result != 'ongoing':
         winner = "draw" if result == 'draw' else "You win!"
-        return game_response({"result": result, "winner": winner, "ai_move": None})
+        return game_response(brain=None, extra={"result": result, "winner": winner, "ai_move": None})
 
-    # AI's turn
-    result, action = ai_move()
+    # AI's turn — capture brain before placing
+    result, action, brain_before = ai_move()
     if result != 'ongoing':
         winner = "draw" if result == 'draw' else "AI wins!"
-        return game_response({"result": result, "winner": winner, "ai_move": action})
+        return game_response(brain=brain_before, extra={"result": result, "winner": winner, "ai_move": action})
 
-    return game_response({"result": "ongoing", "winner": None, "ai_move": action})
+    return game_response(brain=brain_before, extra={"result": "ongoing", "winner": None, "ai_move": action})
 
 
 if __name__ == '__main__':

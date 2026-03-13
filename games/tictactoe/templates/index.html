@@ -475,12 +475,24 @@ async function apiFetch(url, opts = {}) {
   return res.json();
 }
 
+function clearBrain() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  for (let i = 0; i < 9; i++) {
+    document.getElementById(`heat-${i}`).style.opacity = '0';
+    document.getElementById(`prob-${i}`).style.width   = '0%';
+  }
+}
+
 function applyState(data) {
   board      = data.board;
   validMoves = data.valid_moves;
   brain      = data.brain;
   renderBoard();
-  drawNN(brain);
+  if (brain) {
+    drawNN(brain);
+  } else {
+    clearBrain();
+  }
 }
 
 /* ═══════════════════════════════════════════════════════════════════════ *
@@ -514,9 +526,14 @@ async function newGame(humanGoesFirst = false) {
 }
 
 async function humanMove(pos) {
-  if (gameOver)                    return;
-  if (board[pos] !== 0)           return;
-  if (!validMoves.includes(pos))  return;
+  if (gameOver)                   return;
+  if (board[pos] !== 0)          return;
+  if (!validMoves.includes(pos)) return;
+
+  // Clear heatmap the moment human acts — heatmap belongs to the AI's move,
+  // not the human's turn. Clicking is the natural "ok, my turn now" signal.
+  brain = null;
+  clearBrain();
 
   statusEl.textContent = 'AI is thinking…';
   try {
