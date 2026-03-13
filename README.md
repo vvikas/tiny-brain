@@ -5,6 +5,10 @@ Inspired by Andrej Karpathy's [micrograd lecture](https://youtu.be/VMj-3S1tku0).
 
 Includes a TicTacToe game with a **live neural network visualizer** in the browser.
 
+![tiny-brain UI](assets/screenshot.png)
+
+*Left: TicTacToe board with purple heatmap showing where the AI wants to play. Right: live neural network diagram — input layer (board cells), two hidden layers (neurons light up by activation strength), output layer (move probabilities).*
+
 ---
 
 ## What's inside

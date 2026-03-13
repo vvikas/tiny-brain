@@ -43,24 +43,37 @@ def load_agent():
 agent = load_agent()
 game  = TicTacToe()
 
+# human_player: 1 = human plays X (goes first), -1 = human plays O (AI goes first)
+human_player = -1
+
 
 # ── Helper ────────────────────────────────────────────────────────────── #
 
 def game_response(extra=None):
     """Build the standard JSON response with board + brain state."""
-    state      = game.get_state()
-    valid      = game.get_valid_moves()
-    brain      = agent.get_brain_state(state, valid)
+    state = game.get_state()
+    valid = game.get_valid_moves()
+    brain = agent.get_brain_state(state, valid)
 
     payload = {
-        "board":        game.board,
+        "board":          game.board,
         "current_player": game.current_player,
-        "valid_moves":  valid,
-        "brain":        brain,
+        "valid_moves":    valid,
+        "brain":          brain,
+        "human_player":   human_player,
     }
     if extra:
         payload.update(extra)
     return jsonify(payload)
+
+
+def ai_move():
+    """Make one AI move and return (result, ai_action)."""
+    state = game.get_state()
+    valid = game.get_valid_moves()
+    action, _ = agent.select_action(state, valid, training=False)
+    result = game.make_move(action)
+    return result, action
 
 
 # ── Routes ────────────────────────────────────────────────────────────── #
@@ -72,13 +85,19 @@ def index():
 
 @app.route('/api/new_game')
 def new_game():
+    global human_player
+    # ?human=X → human goes first as X; anything else → AI goes first
+    human_player = 1 if request.args.get('human') == 'X' else -1
+
     game.reset()
-    # AI (X=1) always goes first so the human always plays as O (-1).
-    state = game.get_state()
-    valid = game.get_valid_moves()
-    ai_action, _ = agent.select_action(state, valid, training=False)
-    game.make_move(ai_action)
-    return game_response({"message": "New game. You are O. AI (X) has moved.", "ai_move": ai_action})
+
+    if human_player == -1:
+        # AI (X=1) plays first
+        result, action = ai_move()
+        return game_response({"result": result, "ai_move": action})
+    else:
+        # Human (X=1) plays first — board is empty, human's turn
+        return game_response({"result": "ongoing", "ai_move": None})
 
 
 @app.route('/api/move', methods=['POST'])
@@ -89,29 +108,22 @@ def move():
     if pos not in game.get_valid_moves():
         return jsonify({"error": "Invalid move"}), 400
 
-    # It is always O's turn (-1) when the human clicks, because new_game
-    # already has the AI play first. Enforce this.
-    if game.current_player != -1:
+    if game.current_player != human_player:
         return jsonify({"error": "Not your turn"}), 400
 
-    # Human move (O = -1)
+    # Human move
     result = game.make_move(pos)
     if result != 'ongoing':
-        # current_player is still O (the one who just moved and won/drew)
-        winner = "draw" if result == 'draw' else "O (you)"
+        winner = "draw" if result == 'draw' else "You win!"
         return game_response({"result": result, "winner": winner, "ai_move": None})
 
-    # AI's turn (X = 1)
-    state = game.get_state()
-    valid = game.get_valid_moves()
-    ai_action, _ = agent.select_action(state, valid, training=False)
-    result = game.make_move(ai_action)
-
+    # AI's turn
+    result, action = ai_move()
     if result != 'ongoing':
-        winner = "draw" if result == 'draw' else "X (AI)"
-        return game_response({"result": result, "winner": winner, "ai_move": ai_action})
+        winner = "draw" if result == 'draw' else "AI wins!"
+        return game_response({"result": result, "winner": winner, "ai_move": action})
 
-    return game_response({"result": "ongoing", "winner": None, "ai_move": ai_action})
+    return game_response({"result": "ongoing", "winner": None, "ai_move": action})
 
 
 if __name__ == '__main__':

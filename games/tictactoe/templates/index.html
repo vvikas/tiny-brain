@@ -79,6 +79,7 @@
     }
     .cell:hover:not(.taken) { border-color: #7060d0; background: #1a1a2a; }
     .cell.taken             { cursor: default; }
+    .cell-symbol            { font-size: 3rem; line-height: 1; }
 
     /* Heatmap overlay — shows AI's preference for each cell */
     .cell-heat {
@@ -185,11 +186,12 @@
     <div id="prob-grid"></div>
 
     <div id="buttons">
-      <button class="primary" id="btn-new">New Game</button>
+      <button class="primary" id="btn-ai-first">AI goes first (you are O)</button>
+      <button id="btn-human-first">I go first (I am X)</button>
     </div>
 
     <div id="legend">
-      You are <span>O</span> · AI is <span>X</span><br/>
+      <span id="role-label">You are O · AI is X</span><br/>
       Click a cell to play<br/>
       Heatmap = AI wants that cell
     </div>
@@ -229,16 +231,23 @@ for (let i = 0; i < 9; i++) {
   cell.className = 'cell';
   cell.dataset.i = i;
 
-  // heatmap layer inside each cell
+  // Heatmap overlay — always present, just change opacity/colour
   const heat = document.createElement('div');
   heat.className = 'cell-heat';
   heat.id = `heat-${i}`;
   cell.appendChild(heat);
 
+  // Symbol (X / O / empty) — always present, just change textContent
+  const sym = document.createElement('span');
+  sym.className = 'cell-symbol';
+  sym.style.position = 'relative';
+  sym.style.zIndex = '2';
+  cell.appendChild(sym);
+
   cell.addEventListener('click', () => humanMove(i));
   boardEl.appendChild(cell);
 
-  // probability bar below each cell
+  // Probability bar below each cell
   const wrap = document.createElement('div');
   wrap.className = 'prob-bar-wrap';
   const bar = document.createElement('div');
@@ -253,55 +262,35 @@ for (let i = 0; i < 9; i++) {
  *  Render board + heatmap                                                 *
  * ═══════════════════════════════════════════════════════════════════════ */
 function renderBoard() {
-  const symbols = { '0': '', '1': '✕', '-1': '○' };
-  const colors  = { '0': '',   '1': '#c8a0ff', '-1': '#ff7070' };
+  const symbols = { 0: '', 1: '✕', '-1': '○' };
+  const colors  = { 0: '', 1: '#c8a0ff', '-1': '#ff7070' };
 
   board.forEach((val, i) => {
     const cell = boardEl.children[i];
-    cell.textContent = '';                        // clear text first
-    if (val !== 0) {
-      // Re-add the heat div (textContent clears it)
-      const heat = document.getElementById(`heat-${i}`);
-      cell.appendChild(heat);
-    }
-    // Re-append heat div in all cases
-    let heat = document.getElementById(`heat-${i}`);
-    if (!heat) { heat = document.createElement('div'); heat.className='cell-heat'; heat.id=`heat-${i}`; }
-    cell.innerHTML = '';
-    cell.appendChild(heat);
+
+    // Update symbol span in-place — never touch innerHTML/textContent on the cell
+    const sym = cell.querySelector('.cell-symbol');
+    sym.textContent  = symbols[val] ?? '';
+    sym.style.color  = colors[val]  ?? '';
 
     if (val !== 0) {
-      const span = document.createElement('span');
-      span.textContent = symbols[val];
-      span.style.color = colors[val];
-      span.style.position = 'relative';
-      span.style.zIndex = '2';
-      cell.appendChild(span);
       cell.classList.add('taken');
     } else {
       cell.classList.remove('taken');
     }
   });
 
-  // Heatmap & prob bars
+  // Heatmap overlay + prob bars
   if (brain && brain.probs) {
-    const probs = brain.probs;
-    const maxP  = Math.max(...probs);
-
-    probs.forEach((p, i) => {
-      // Heatmap colour: transparent → amber/purple gradient
+    brain.probs.forEach((p, i) => {
       const heat = document.getElementById(`heat-${i}`);
       if (board[i] === 0) {
-        // orange-purple hue, opacity scaled by probability
         heat.style.background = `rgba(160, 90, 255, ${p * 1.8})`;
         heat.style.opacity = '1';
       } else {
         heat.style.opacity = '0';
       }
-
-      // Prob bar
-      const bar = document.getElementById(`prob-${i}`);
-      bar.style.width = (p * 100).toFixed(1) + '%';
+      document.getElementById(`prob-${i}`).style.width = (p * 100).toFixed(1) + '%';
     });
   }
 }
@@ -497,14 +486,28 @@ function applyState(data) {
 /* ═══════════════════════════════════════════════════════════════════════ *
  *  Game actions                                                           *
  * ═══════════════════════════════════════════════════════════════════════ */
-async function newGame() {
+let humanPlayer = -1;   // -1 = O (default), 1 = X
+
+const roleLabel = document.getElementById('role-label');
+
+async function newGame(humanGoesFirst = false) {
   gameOver = false;
   statusEl.textContent = 'Starting…';
+  const param = humanGoesFirst ? '?human=X' : '';
   try {
-    // AI (X) always goes first — server handles it in /api/new_game
-    const data = await apiFetch('/api/new_game');
+    const data = await apiFetch(`/api/new_game${param}`);
+    humanPlayer = data.human_player;
     applyState(data);
-    statusEl.textContent = 'Your turn — you are O';
+
+    const symbol = humanPlayer === 1 ? 'X' : 'O';
+    const aiSymbol = humanPlayer === 1 ? 'O' : 'X';
+    roleLabel.textContent = `You are ${symbol} · AI is ${aiSymbol}`;
+
+    if (humanPlayer === 1) {
+      statusEl.textContent = 'Your turn — you are X (go first!)';
+    } else {
+      statusEl.textContent = 'Your turn — you are O';
+    }
   } catch (e) {
     statusEl.textContent = 'Error: ' + e.message;
   }
@@ -525,13 +528,13 @@ async function humanMove(pos) {
 
     if (data.result === 'win') {
       gameOver = true;
-      statusEl.textContent = data.winner.startsWith('O')
-        ? 'You win! (O)' : 'AI wins! (X)';
+      statusEl.textContent = data.winner;
     } else if (data.result === 'draw') {
       gameOver = true;
       statusEl.textContent = "It's a draw!";
     } else {
-      statusEl.textContent = 'Your turn — you are O';
+      const symbol = humanPlayer === 1 ? 'X' : 'O';
+      statusEl.textContent = `Your turn — you are ${symbol}`;
     }
   } catch (e) {
     statusEl.textContent = 'Error: ' + e.message;
@@ -541,12 +544,13 @@ async function humanMove(pos) {
 /* ═══════════════════════════════════════════════════════════════════════ *
  *  Wire up buttons                                                        *
  * ═══════════════════════════════════════════════════════════════════════ */
-document.getElementById('btn-new').addEventListener('click', newGame);
+document.getElementById('btn-ai-first').addEventListener('click',    () => newGame(false));
+document.getElementById('btn-human-first').addEventListener('click', () => newGame(true));
 
 /* ═══════════════════════════════════════════════════════════════════════ *
  *  Boot                                                                   *
  * ═══════════════════════════════════════════════════════════════════════ */
-newGame();
+newGame(false);
 </script>
 </body>
 </html>
