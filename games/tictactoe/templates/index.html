@@ -186,7 +186,6 @@
 
     <div id="buttons">
       <button class="primary" id="btn-new">New Game</button>
-      <button id="btn-ai-first">AI goes first</button>
     </div>
 
     <div id="legend">
@@ -480,6 +479,10 @@ async function apiFetch(url, opts = {}) {
     headers: { 'Content-Type': 'application/json' },
     ...opts,
   });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `HTTP ${res.status}`);
+  }
   return res.json();
 }
 
@@ -496,54 +499,49 @@ function applyState(data) {
  * ═══════════════════════════════════════════════════════════════════════ */
 async function newGame() {
   gameOver = false;
-  statusEl.textContent = 'Your turn (O)';
-  const data = await apiFetch('/api/new_game');
-  applyState(data);
-}
-
-async function humanMove(pos) {
-  if (gameOver)              return;
-  if (board[pos] !== 0)     return;
-  if (!validMoves.includes(pos)) return;
-
-  statusEl.textContent = 'AI is thinking…';
-
-  const data = await apiFetch('/api/move', {
-    method: 'POST',
-    body: JSON.stringify({ pos }),
-  });
-
-  applyState(data);
-
-  if (data.result === 'win') {
-    gameOver = true;
-    statusEl.textContent = data.winner === 'O'
-      ? '🎉 You win! (O)'
-      : '🤖 AI wins! (X)';
-  } else if (data.result === 'draw') {
-    gameOver = true;
-    statusEl.textContent = "It's a draw!";
-  } else {
-    statusEl.textContent = 'Your turn (O)';
+  statusEl.textContent = 'Starting…';
+  try {
+    // AI (X) always goes first — server handles it in /api/new_game
+    const data = await apiFetch('/api/new_game');
+    applyState(data);
+    statusEl.textContent = 'Your turn — you are O';
+  } catch (e) {
+    statusEl.textContent = 'Error: ' + e.message;
   }
 }
 
-async function aiFirst() {
-  if (gameOver) return;
+async function humanMove(pos) {
+  if (gameOver)                    return;
+  if (board[pos] !== 0)           return;
+  if (!validMoves.includes(pos))  return;
+
   statusEl.textContent = 'AI is thinking…';
-  const data = await apiFetch('/api/ai_first', { method: 'POST' });
-  applyState(data);
-  statusEl.textContent = 'Your turn (O)';
+  try {
+    const data = await apiFetch('/api/move', {
+      method: 'POST',
+      body: JSON.stringify({ pos }),
+    });
+    applyState(data);
+
+    if (data.result === 'win') {
+      gameOver = true;
+      statusEl.textContent = data.winner.startsWith('O')
+        ? 'You win! (O)' : 'AI wins! (X)';
+    } else if (data.result === 'draw') {
+      gameOver = true;
+      statusEl.textContent = "It's a draw!";
+    } else {
+      statusEl.textContent = 'Your turn — you are O';
+    }
+  } catch (e) {
+    statusEl.textContent = 'Error: ' + e.message;
+  }
 }
 
 /* ═══════════════════════════════════════════════════════════════════════ *
  *  Wire up buttons                                                        *
  * ═══════════════════════════════════════════════════════════════════════ */
 document.getElementById('btn-new').addEventListener('click', newGame);
-document.getElementById('btn-ai-first').addEventListener('click', async () => {
-  await newGame();
-  await aiFirst();
-});
 
 /* ═══════════════════════════════════════════════════════════════════════ *
  *  Boot                                                                   *

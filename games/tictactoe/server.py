@@ -73,7 +73,12 @@ def index():
 @app.route('/api/new_game')
 def new_game():
     game.reset()
-    return game_response({"message": "New game started. You are O (-1). AI is X (1)."})
+    # AI (X=1) always goes first so the human always plays as O (-1).
+    state = game.get_state()
+    valid = game.get_valid_moves()
+    ai_action, _ = agent.select_action(state, valid, training=False)
+    game.make_move(ai_action)
+    return game_response({"message": "New game. You are O. AI (X) has moved.", "ai_move": ai_action})
 
 
 @app.route('/api/move', methods=['POST'])
@@ -84,45 +89,29 @@ def move():
     if pos not in game.get_valid_moves():
         return jsonify({"error": "Invalid move"}), 400
 
-    # Human plays as O (-1).
-    # The game starts with current_player = 1 (X = AI).
-    # We let the AI go first if it's X's turn, then human goes.
-    # But the human sends a move, so it must be their turn (O = -1).
+    # It is always O's turn (-1) when the human clicks, because new_game
+    # already has the AI play first. Enforce this.
+    if game.current_player != -1:
+        return jsonify({"error": "Not your turn"}), 400
 
-    # Human move
+    # Human move (O = -1)
     result = game.make_move(pos)
     if result != 'ongoing':
-        winner = "draw" if result == 'draw' else ("O" if game.current_player == -1 else "X")
+        # current_player is still O (the one who just moved and won/drew)
+        winner = "draw" if result == 'draw' else "O (you)"
         return game_response({"result": result, "winner": winner, "ai_move": None})
 
-    # AI move (X = 1)
+    # AI's turn (X = 1)
     state = game.get_state()
     valid = game.get_valid_moves()
-    if not valid:
-        return game_response({"result": "draw", "winner": "draw", "ai_move": None})
-
     ai_action, _ = agent.select_action(state, valid, training=False)
     result = game.make_move(ai_action)
 
     if result != 'ongoing':
-        winner = "draw" if result == 'draw' else ("X" if game.current_player == 1 else "O")
+        winner = "draw" if result == 'draw' else "X (AI)"
         return game_response({"result": result, "winner": winner, "ai_move": ai_action})
 
     return game_response({"result": "ongoing", "winner": None, "ai_move": ai_action})
-
-
-@app.route('/api/ai_first', methods=['POST'])
-def ai_first():
-    """Let the AI make the first move (so human plays as O)."""
-    if game.current_player != 1:
-        return jsonify({"error": "Not AI's turn"}), 400
-
-    state = game.get_state()
-    valid = game.get_valid_moves()
-    ai_action, _ = agent.select_action(state, valid, training=False)
-    result = game.make_move(ai_action)
-
-    return game_response({"result": result, "ai_move": ai_action})
 
 
 if __name__ == '__main__':
