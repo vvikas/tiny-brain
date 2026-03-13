@@ -1,0 +1,554 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>tiny-brain · TicTacToe</title>
+  <style>
+    /* ── Reset & base ─────────────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #0d0d12;
+      color: #e0e0e0;
+      font-family: 'Courier New', monospace;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+
+    /* ── Header ─────────────────────────────────────────────────────────*/
+    header {
+      width: 100%;
+      padding: 18px 32px;
+      display: flex;
+      align-items: baseline;
+      gap: 16px;
+      border-bottom: 1px solid #1e1e2e;
+    }
+    header h1 { font-size: 1.5rem; color: #c8a0ff; letter-spacing: 2px; }
+    header p  { font-size: 0.78rem; color: #666; }
+
+    /* ── Main layout ────────────────────────────────────────────────────*/
+    main {
+      display: flex;
+      gap: 40px;
+      padding: 32px 24px;
+      width: 100%;
+      max-width: 1300px;
+      align-items: flex-start;
+    }
+
+    /* ── Left panel: game board ─────────────────────────────────────────*/
+    #game-panel {
+      flex: 0 0 auto;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 20px;
+    }
+
+    #status {
+      font-size: 1rem;
+      color: #aaa;
+      min-height: 1.4em;
+      text-align: center;
+    }
+
+    /* The board is a 3x3 CSS grid */
+    #board {
+      display: grid;
+      grid-template-columns: repeat(3, 110px);
+      grid-template-rows:    repeat(3, 110px);
+      gap: 6px;
+    }
+
+    .cell {
+      background: #14141f;
+      border: 2px solid #252535;
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 3rem;
+      cursor: pointer;
+      position: relative;
+      transition: background 0.15s, border-color 0.15s;
+      user-select: none;
+    }
+    .cell:hover:not(.taken) { border-color: #7060d0; background: #1a1a2a; }
+    .cell.taken             { cursor: default; }
+
+    /* Heatmap overlay — shows AI's preference for each cell */
+    .cell-heat {
+      position: absolute;
+      inset: 0;
+      border-radius: 8px;
+      opacity: 0;
+      transition: opacity 0.3s;
+      pointer-events: none;
+    }
+
+    #buttons { display: flex; gap: 12px; }
+    button {
+      background: #1e1e2e;
+      color: #ccc;
+      border: 1px solid #333;
+      border-radius: 6px;
+      padding: 8px 18px;
+      font-family: inherit;
+      font-size: 0.85rem;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    button:hover { background: #2a2a3e; }
+    button.primary { background: #5040a0; color: #fff; border-color: #7060d0; }
+    button.primary:hover { background: #6050b0; }
+
+    #legend {
+      font-size: 0.72rem;
+      color: #555;
+      text-align: center;
+      line-height: 1.8;
+    }
+    #legend span { color: #888; }
+
+    /* ── Right panel: neural network visualizer ─────────────────────────*/
+    #nn-panel {
+      flex: 1 1 auto;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    #nn-panel h2 {
+      font-size: 0.85rem;
+      letter-spacing: 2px;
+      color: #7060d0;
+      text-transform: uppercase;
+    }
+
+    #nn-canvas {
+      background: #0a0a10;
+      border: 1px solid #1e1e2e;
+      border-radius: 12px;
+      display: block;
+    }
+
+    #nn-legend {
+      font-size: 0.7rem;
+      color: #444;
+      line-height: 2;
+    }
+    #nn-legend strong { color: #666; }
+
+    /* ── Prob bars below board ─────────────────────────────────────────*/
+    #prob-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 110px);
+      grid-template-rows: repeat(3, 18px);
+      gap: 6px;
+    }
+    .prob-bar-wrap {
+      background: #14141f;
+      border-radius: 3px;
+      overflow: hidden;
+    }
+    .prob-bar {
+      height: 100%;
+      background: linear-gradient(90deg, #5040a0, #c8a0ff);
+      transition: width 0.3s;
+      border-radius: 3px;
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>tiny-brain</h1>
+  <p>Custom neural network library — inspired by Karpathy's micrograd</p>
+</header>
+
+<main>
+
+  <!-- ── Left: board ──────────────────────────────────────────────────── -->
+  <div id="game-panel">
+    <div id="status">Loading...</div>
+
+    <div id="board"></div>
+
+    <!-- Probability bars mirroring the board layout -->
+    <div style="font-size:0.7rem; color:#444; text-align:center; margin-top:4px;">
+      AI move preference (output layer probabilities)
+    </div>
+    <div id="prob-grid"></div>
+
+    <div id="buttons">
+      <button class="primary" id="btn-new">New Game</button>
+      <button id="btn-ai-first">AI goes first</button>
+    </div>
+
+    <div id="legend">
+      You are <span>O</span> · AI is <span>X</span><br/>
+      Click a cell to play<br/>
+      Heatmap = AI wants that cell
+    </div>
+  </div>
+
+  <!-- ── Right: neural network visualizer ────────────────────────────── -->
+  <div id="nn-panel">
+    <h2>Neural Network — What the AI is thinking</h2>
+    <canvas id="nn-canvas" width="780" height="520"></canvas>
+    <div id="nn-legend">
+      <strong>Input layer (9)</strong> — board cells: blue=X, red=O, grey=empty &nbsp;|&nbsp;
+      <strong>Hidden layers (32×2)</strong> — ReLU neurons, brighter = more active &nbsp;|&nbsp;
+      <strong>Output layer (9)</strong> — bar height = probability AI wants that cell
+    </div>
+  </div>
+
+</main>
+
+<script>
+/* ═══════════════════════════════════════════════════════════════════════ *
+ *  State                                                                  *
+ * ═══════════════════════════════════════════════════════════════════════ */
+let board       = Array(9).fill(0);
+let validMoves  = [];
+let brain       = null;
+let gameOver    = false;
+
+/* ═══════════════════════════════════════════════════════════════════════ *
+ *  Build DOM board + prob bars                                            *
+ * ═══════════════════════════════════════════════════════════════════════ */
+const boardEl   = document.getElementById('board');
+const probGrid  = document.getElementById('prob-grid');
+const statusEl  = document.getElementById('status');
+
+for (let i = 0; i < 9; i++) {
+  const cell = document.createElement('div');
+  cell.className = 'cell';
+  cell.dataset.i = i;
+
+  // heatmap layer inside each cell
+  const heat = document.createElement('div');
+  heat.className = 'cell-heat';
+  heat.id = `heat-${i}`;
+  cell.appendChild(heat);
+
+  cell.addEventListener('click', () => humanMove(i));
+  boardEl.appendChild(cell);
+
+  // probability bar below each cell
+  const wrap = document.createElement('div');
+  wrap.className = 'prob-bar-wrap';
+  const bar = document.createElement('div');
+  bar.className = 'prob-bar';
+  bar.id = `prob-${i}`;
+  bar.style.width = '0%';
+  wrap.appendChild(bar);
+  probGrid.appendChild(wrap);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════ *
+ *  Render board + heatmap                                                 *
+ * ═══════════════════════════════════════════════════════════════════════ */
+function renderBoard() {
+  const symbols = { '0': '', '1': '✕', '-1': '○' };
+  const colors  = { '0': '',   '1': '#c8a0ff', '-1': '#ff7070' };
+
+  board.forEach((val, i) => {
+    const cell = boardEl.children[i];
+    cell.textContent = '';                        // clear text first
+    if (val !== 0) {
+      // Re-add the heat div (textContent clears it)
+      const heat = document.getElementById(`heat-${i}`);
+      cell.appendChild(heat);
+    }
+    // Re-append heat div in all cases
+    let heat = document.getElementById(`heat-${i}`);
+    if (!heat) { heat = document.createElement('div'); heat.className='cell-heat'; heat.id=`heat-${i}`; }
+    cell.innerHTML = '';
+    cell.appendChild(heat);
+
+    if (val !== 0) {
+      const span = document.createElement('span');
+      span.textContent = symbols[val];
+      span.style.color = colors[val];
+      span.style.position = 'relative';
+      span.style.zIndex = '2';
+      cell.appendChild(span);
+      cell.classList.add('taken');
+    } else {
+      cell.classList.remove('taken');
+    }
+  });
+
+  // Heatmap & prob bars
+  if (brain && brain.probs) {
+    const probs = brain.probs;
+    const maxP  = Math.max(...probs);
+
+    probs.forEach((p, i) => {
+      // Heatmap colour: transparent → amber/purple gradient
+      const heat = document.getElementById(`heat-${i}`);
+      if (board[i] === 0) {
+        // orange-purple hue, opacity scaled by probability
+        heat.style.background = `rgba(160, 90, 255, ${p * 1.8})`;
+        heat.style.opacity = '1';
+      } else {
+        heat.style.opacity = '0';
+      }
+
+      // Prob bar
+      const bar = document.getElementById(`prob-${i}`);
+      bar.style.width = (p * 100).toFixed(1) + '%';
+    });
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════ *
+ *  Neural Network Canvas Renderer                                         *
+ * ═══════════════════════════════════════════════════════════════════════ */
+const canvas = document.getElementById('nn-canvas');
+const ctx    = canvas.getContext('2d');
+
+function lerp(a, b, t) { return a + (b - a) * t; }
+
+function activationColor(val, maxVal) {
+  // Map 0..maxVal → cool blue to hot yellow
+  const t = maxVal > 0 ? Math.min(val / (maxVal + 1e-8), 1.0) : 0;
+  // Cool (dark blue) to hot (bright yellow-white)
+  const r = Math.round(lerp(20,  255, t));
+  const g = Math.round(lerp(20,  220, t * 0.8));
+  const b = Math.round(lerp(80,   50, t));
+  return `rgb(${r},${g},${b})`;
+}
+
+function inputNeuronColor(val) {
+  if (val >  0.5) return '#c8a0ff';   // X — purple
+  if (val < -0.5) return '#ff7070';   // O — red
+  return '#303050';                    // empty — dark grey
+}
+
+function drawNN(brainState) {
+  if (!brainState) return;
+
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  const W = canvas.width;
+  const H = canvas.height;
+  const PAD_X = 60;
+  const PAD_Y = 40;
+
+  // Collect layers: inputs, hidden1, hidden2, output (logits/probs)
+  const layers = [
+    { name: 'INPUT\n(9)',    vals: brainState.inputs,  isInput: true },
+    { name: 'HIDDEN 1\n(32)', vals: brainState.hidden1 || [] },
+    { name: 'HIDDEN 2\n(32)', vals: brainState.hidden2 || [] },
+    { name: 'OUTPUT\n(9)',   vals: brainState.probs,   isOutput: true },
+  ];
+
+  const nLayers = layers.length;
+  const layerX  = layers.map((_, i) =>
+    PAD_X + (i / (nLayers - 1)) * (W - 2 * PAD_X)
+  );
+
+  // Max neurons to display per layer (clip hidden layers for readability)
+  const MAX_DISPLAY = 20;
+  const neuronY = (layerIdx, neuronIdx, total) => {
+    const displayed = Math.min(total, MAX_DISPLAY);
+    const spacing = (H - 2 * PAD_Y) / (displayed - 1 || 1);
+    const startY  = PAD_Y + ((displayed - 1) * spacing) / 2;
+    // For hidden layers: show first MAX_DISPLAY/2 and last MAX_DISPLAY/2
+    return PAD_Y + neuronIdx * spacing;
+  };
+
+  // Draw connections (sample — drawing all would be too dense)
+  ctx.globalAlpha = 0.06;
+  for (let li = 0; li < nLayers - 1; li++) {
+    const srcVals = layers[li].vals;
+    const dstVals = layers[li + 1].vals;
+    const srcCount = Math.min(srcVals.length, MAX_DISPLAY);
+    const dstCount = Math.min(dstVals.length, MAX_DISPLAY);
+
+    // Draw a sampled subset of connections
+    const srcStep = Math.max(1, Math.ceil(srcCount / 8));
+    const dstStep = Math.max(1, Math.ceil(dstCount / 8));
+
+    for (let si = 0; si < srcCount; si += srcStep) {
+      for (let di = 0; di < dstCount; di += dstStep) {
+        const x1 = layerX[li];
+        const y1 = neuronY(li, si, srcCount);
+        const x2 = layerX[li + 1];
+        const y2 = neuronY(li + 1, di, dstCount);
+        ctx.beginPath();
+        ctx.strokeStyle = '#8080c0';
+        ctx.lineWidth = 0.5;
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x2, y2);
+        ctx.stroke();
+      }
+    }
+  }
+  ctx.globalAlpha = 1.0;
+
+  // Draw neurons
+  layers.forEach((layer, li) => {
+    const vals    = layer.vals;
+    const count   = vals.length;
+    const display = Math.min(count, MAX_DISPLAY);
+    const maxVal  = Math.max(...vals.map(Math.abs), 1e-8);
+
+    for (let ni = 0; ni < display; ni++) {
+      const val = vals[ni];
+      const x   = layerX[li];
+      const y   = neuronY(li, ni, display);
+      const r   = layer.isInput || layer.isOutput ? 10 : 7;
+
+      // Fill
+      let fillColor;
+      if (layer.isInput) {
+        fillColor = inputNeuronColor(val);
+      } else if (layer.isOutput) {
+        // output: prob → green shade
+        const t = Math.min(val * 3, 1.0);
+        const gv = Math.round(lerp(30, 220, t));
+        fillColor = `rgb(30, ${gv}, 80)`;
+      } else {
+        fillColor = activationColor(val, maxVal);
+      }
+
+      ctx.beginPath();
+      ctx.arc(x, y, r, 0, Math.PI * 2);
+      ctx.fillStyle = fillColor;
+      ctx.fill();
+      ctx.strokeStyle = '#303050';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+
+      // Show value on output neurons (cell index)
+      if (layer.isOutput) {
+        ctx.fillStyle = '#ccc';
+        ctx.font = '9px Courier New';
+        ctx.textAlign = 'center';
+        ctx.fillText((val * 100).toFixed(0) + '%', x, y + r + 11);
+      }
+    }
+
+    // Ellipsis if hidden neurons clipped
+    if (count > MAX_DISPLAY) {
+      const lastY = neuronY(li, display - 1, display);
+      ctx.fillStyle = '#555';
+      ctx.font = '11px Courier New';
+      ctx.textAlign = 'center';
+      ctx.fillText(`…+${count - MAX_DISPLAY}`, layerX[li], lastY + 18);
+    }
+
+    // Layer label
+    ctx.fillStyle = '#7060d0';
+    ctx.font = 'bold 11px Courier New';
+    ctx.textAlign = 'center';
+    const label = layer.name.split('\n');
+    label.forEach((line, j) => {
+      ctx.fillText(line, layerX[li], H - PAD_Y + 14 + j * 14);
+    });
+  });
+
+  // Output bar chart (mini, above output neurons)
+  if (brainState.probs) {
+    const probs  = brainState.probs;
+    const ox     = layerX[nLayers - 1];
+    const barW   = 18;
+    const barMax = 60;
+    const display = Math.min(probs.length, MAX_DISPLAY);
+
+    probs.slice(0, display).forEach((p, i) => {
+      const y    = neuronY(nLayers - 1, i, display);
+      const barH = p * barMax;
+      ctx.fillStyle = `rgba(100, 200, 120, ${0.3 + p})`;
+      ctx.fillRect(ox + 14, y - barH / 2, barW, barH);
+    });
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════ *
+ *  API helpers                                                            *
+ * ═══════════════════════════════════════════════════════════════════════ */
+async function apiFetch(url, opts = {}) {
+  const res = await fetch(url, {
+    headers: { 'Content-Type': 'application/json' },
+    ...opts,
+  });
+  return res.json();
+}
+
+function applyState(data) {
+  board      = data.board;
+  validMoves = data.valid_moves;
+  brain      = data.brain;
+  renderBoard();
+  drawNN(brain);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════ *
+ *  Game actions                                                           *
+ * ═══════════════════════════════════════════════════════════════════════ */
+async function newGame() {
+  gameOver = false;
+  statusEl.textContent = 'Your turn (O)';
+  const data = await apiFetch('/api/new_game');
+  applyState(data);
+}
+
+async function humanMove(pos) {
+  if (gameOver)              return;
+  if (board[pos] !== 0)     return;
+  if (!validMoves.includes(pos)) return;
+
+  statusEl.textContent = 'AI is thinking…';
+
+  const data = await apiFetch('/api/move', {
+    method: 'POST',
+    body: JSON.stringify({ pos }),
+  });
+
+  applyState(data);
+
+  if (data.result === 'win') {
+    gameOver = true;
+    statusEl.textContent = data.winner === 'O'
+      ? '🎉 You win! (O)'
+      : '🤖 AI wins! (X)';
+  } else if (data.result === 'draw') {
+    gameOver = true;
+    statusEl.textContent = "It's a draw!";
+  } else {
+    statusEl.textContent = 'Your turn (O)';
+  }
+}
+
+async function aiFirst() {
+  if (gameOver) return;
+  statusEl.textContent = 'AI is thinking…';
+  const data = await apiFetch('/api/ai_first', { method: 'POST' });
+  applyState(data);
+  statusEl.textContent = 'Your turn (O)';
+}
+
+/* ═══════════════════════════════════════════════════════════════════════ *
+ *  Wire up buttons                                                        *
+ * ═══════════════════════════════════════════════════════════════════════ */
+document.getElementById('btn-new').addEventListener('click', newGame);
+document.getElementById('btn-ai-first').addEventListener('click', async () => {
+  await newGame();
+  await aiFirst();
+});
+
+/* ═══════════════════════════════════════════════════════════════════════ *
+ *  Boot                                                                   *
+ * ═══════════════════════════════════════════════════════════════════════ */
+newGame();
+</script>
+</body>
+</html>
