@@ -1,0 +1,804 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Nurikabe — tiny-brain</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      background: #0f1117;
+      color: #e2e8f0;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 24px 16px 48px;
+    }
+
+    h1 { font-size: 1.6rem; font-weight: 700; letter-spacing: .05em; margin-bottom: 4px; }
+    .subtitle { color: #94a3b8; font-size: .85rem; margin-bottom: 24px; }
+
+    .main-layout {
+      display: flex;
+      gap: 32px;
+      align-items: flex-start;
+      flex-wrap: wrap;
+      justify-content: center;
+      width: 100%;
+      max-width: 1100px;
+    }
+
+    .card {
+      background: #1e2130;
+      border-radius: 12px;
+      padding: 20px;
+      box-shadow: 0 4px 24px rgba(0,0,0,.4);
+    }
+    .card h2 { font-size: .95rem; color: #94a3b8; text-transform: uppercase;
+               letter-spacing: .08em; margin-bottom: 14px; }
+
+    .controls { display: flex; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; }
+    button {
+      padding: 9px 20px;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: .9rem;
+      font-weight: 600;
+      transition: opacity .15s, transform .1s;
+    }
+    button:hover  { opacity: .85; }
+    button:active { transform: scale(.97); }
+    button:disabled { opacity: .4; cursor: default; }
+    .btn-primary  { background: #6366f1; color: #fff; }
+    .btn-success  { background: #22c55e; color: #fff; }
+    .btn-danger   { background: #ef4444; color: #fff; }
+    .btn-neutral  { background: #334155; color: #e2e8f0; }
+    .btn-amber    { background: #d97706; color: #fff; }
+
+    /* ── NN Solve controls ── */
+    .nn-controls {
+      display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap;
+      padding: 10px 14px;
+      background: #141722;
+      border-radius: 8px;
+      border: 1px solid #334155;
+      align-items: center;
+    }
+    .nn-controls span { font-size: .82rem; color: #94a3b8; flex: 1; min-width: 120px; }
+
+    /* ── Board ── */
+    #board {
+      display: grid;
+      grid-template-columns: repeat(5, 62px);
+      grid-template-rows:    repeat(5, 62px);
+      gap: 2px;
+      background: #0a0c14;
+      border: 2px solid #334155;
+      border-radius: 6px;
+      overflow: hidden;
+      user-select: none;
+    }
+    .cell {
+      width: 62px; height: 62px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 1.2rem; font-weight: 700;
+      cursor: pointer;
+      position: relative;
+      transition: background .12s;
+    }
+    .cell.unknown { background: #2a2f45; color: #94a3b8; }
+    .cell.black   { background: #1a1f35; color: #1a1f35; }
+    .cell.white   { background: #e2e8f0; color: #1e2130; }
+    .cell.clue    { background: #e2e8f0; color: #1e2130; cursor: default; font-size: 1.4rem; }
+
+    /* Confidence badge shown when NN locks a cell */
+    .cell .conf-badge {
+      position: absolute;
+      bottom: 2px; right: 3px;
+      font-size: 9px;
+      font-weight: 700;
+      color: #fbbf24;
+      pointer-events: none;
+      line-height: 1;
+    }
+
+    /* Heatmap overlay */
+    .cell .heat {
+      position: absolute; inset: 0;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity .3s;
+    }
+    .cell.show-heat .heat { opacity: .55; }
+
+    /* Violation */
+    .cell.violation { outline: 3px solid #ef4444; outline-offset: -3px; z-index: 1; }
+
+    /* ── Mode buttons ── */
+    .mode-row { display: flex; gap: 8px; margin-bottom: 14px; align-items: center; }
+    .mode-label { color: #94a3b8; font-size: .85rem; }
+    .mode-btn {
+      padding: 5px 14px; font-size: .82rem; border-radius: 6px;
+      background: #2a2f45; color: #94a3b8; border: 1px solid #334155;
+    }
+    .mode-btn.active { background: #6366f1; color: #fff; border-color: #6366f1; }
+
+    /* ── Legend ── */
+    .legend { display: flex; gap: 14px; margin-top: 14px; flex-wrap: wrap;
+              font-size: .78rem; color: #94a3b8; }
+    .legend-item { display: flex; align-items: center; gap: 6px; }
+    .legend-swatch { width: 16px; height: 16px; border-radius: 3px; border: 1px solid #334155; }
+
+    /* ── Status ── */
+    #status {
+      margin-top: 14px; padding: 10px 16px; border-radius: 8px;
+      font-size: .9rem; background: #2a2f45; min-height: 42px;
+    }
+    #status.ok    { background: #14532d; color: #4ade80; }
+    #status.error { background: #450a0a; color: #f87171; }
+    #status.info  { background: #2a2f45; color: #94a3b8; }
+
+    /* ── Brain canvas ── */
+    #brain-wrap { min-width: 300px; }
+    #brain-canvas { display: block; border-radius: 8px; background: #141722; }
+
+    /* ── Prob mini-grid ── */
+    .prob-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 3px; margin-top: 12px; }
+    .prob-cell { height: 8px; border-radius: 2px; }
+
+    /* ── Rules ── */
+    .rules { font-size: .8rem; color: #94a3b8; line-height: 1.6; }
+    .rules li { margin-bottom: 6px; }
+    .rules strong { color: #e2e8f0; }
+
+    /* ── Check details ── */
+    .check-details { font-size: .8rem; color: #94a3b8; margin-top: 8px; line-height: 1.7; }
+    .check-ok  { color: #4ade80; }
+    .check-err { color: #f87171; }
+
+    /* ── Spinner ── */
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .spinner {
+      display: inline-block; width: 14px; height: 14px;
+      border: 2px solid #6366f1; border-top-color: transparent;
+      border-radius: 50%; animation: spin .7s linear infinite;
+      vertical-align: middle; margin-right: 6px;
+    }
+  </style>
+</head>
+<body>
+
+<h1>Nurikabe</h1>
+<p class="subtitle">Iterative NN solver · 50→256→256→25 MLP · 5×5 grid · tiny-brain inference</p>
+
+<div class="main-layout">
+
+  <!-- ── Left: game board ──────────────────────────────────────────────── -->
+  <div>
+    <div class="card">
+      <h2>Puzzle</h2>
+
+      <div class="controls">
+        <button class="btn-primary"  onclick="newPuzzle()">New Puzzle</button>
+        <button class="btn-neutral"  onclick="revealSolution()">Reveal Answer</button>
+        <button class="btn-neutral"  onclick="clearBoard()">Clear</button>
+        <button class="btn-neutral"  id="btn-undo" onclick="undo()">⟵ Undo</button>
+      </div>
+
+      <!-- NN Solve controls -->
+      <div class="nn-controls">
+        <span id="nn-step-label">NN: ready</span>
+        <button class="btn-success" id="btn-auto"  onclick="nnAutoSolve()">▶ Auto Solve</button>
+        <button class="btn-amber"   id="btn-step"  onclick="nnStep()">→ Step</button>
+        <button class="btn-neutral" id="btn-reset" onclick="nnReset()">↺ Reset NN</button>
+      </div>
+
+      <div class="mode-row">
+        <span class="mode-label">Draw mode:</span>
+        <button class="mode-btn active" id="mode-black" onclick="setMode('black')">■ Black</button>
+        <button class="mode-btn"        id="mode-white" onclick="setMode('white')">□ White</button>
+        <button class="mode-btn"        id="mode-erase" onclick="setMode('erase')">✕ Erase</button>
+      </div>
+
+      <div id="board"></div>
+
+      <div class="legend">
+        <div class="legend-item">
+          <div class="legend-swatch" style="background:#1a1f35"></div> Black (river)
+        </div>
+        <div class="legend-item">
+          <div class="legend-swatch" style="background:#e2e8f0"></div> White (island)
+        </div>
+        <div class="legend-item">
+          <div class="legend-swatch" style="background:#fbbf24"></div>
+          Yellow % = NN confidence (cell colour = decision, % = certainty)
+        </div>
+      </div>
+
+      <div id="status" class="info">Loading puzzle…</div>
+      <div class="check-details" id="check-details"></div>
+    </div>
+
+    <div style="display:flex; gap:10px; margin-top:12px; flex-wrap:wrap;">
+      <button class="btn-success" onclick="checkSolution()">Check My Solution</button>
+      <button class="btn-neutral" id="heat-btn" onclick="toggleHeat()">Show NN Heatmap</button>
+    </div>
+  </div>
+
+  <!-- ── Right: brain visualizer ───────────────────────────────────────── -->
+  <div class="card" id="brain-wrap">
+    <h2>Neural Network</h2>
+    <canvas id="brain-canvas" width="300" height="420"></canvas>
+    <div style="margin-top:12px;">
+      <div style="font-size:.8rem; color:#94a3b8; margin-bottom:6px;">
+        P(white) per cell — updated each NN step
+      </div>
+      <div class="prob-grid" id="prob-grid"></div>
+    </div>
+  </div>
+
+  <!-- ── Rules ─────────────────────────────────────────────────────────── -->
+  <div class="card" style="max-width:240px;">
+    <h2>Rules</h2>
+    <ul class="rules">
+      <li><strong>Numbers</strong> indicate the size of the island they belong to.</li>
+      <li>All <strong>black cells</strong> (the river) must form one connected group.</li>
+      <li>No <strong>2×2 block</strong> of black cells is allowed.</li>
+      <li><strong>Islands</strong> must not touch each other — only their own number.</li>
+      <li>Every island's size must <strong>exactly</strong> match its clue number.</li>
+    </ul>
+    <div style="margin-top:16px; font-size:.78rem; color:#64748b; line-height:1.5;">
+      <strong style="color:#94a3b8">How to use:</strong><br>
+      Draw cells yourself, use <em>→ Step</em> to add one NN move,
+      or <em>▶ Auto Solve</em> to run to the end.
+      The NN always uses your current board as its starting state.
+      <em>⟵ Undo</em> reverses the last action (yours or the NN's).
+    </div>
+  </div>
+
+</div>
+
+<script>
+/* ═══════════════════════════════════════════════════════════════════════════
+   State
+═══════════════════════════════════════════════════════════════════════════ */
+const ROWS = 5, COLS = 5, SIZE = 25;
+
+let st = {
+  clues:       {},                          // { cellIndex: size }
+  solution:    null,                        // ground truth
+  board:       new Array(SIZE).fill(null),  // null/0/1 — unified board
+  boardOrigin: new Array(SIZE).fill(null),  // null/'user'/'nn'
+  nnConf:      new Array(SIZE).fill(null),  // NN confidence per cell (0–0.5)
+  nnProbs:     new Array(SIZE).fill(0.5),
+  brain:       null,
+  showHeat:    false,
+  drawMode:    'black',
+  isDrawing:   false,
+  strokePushed: false,   // only push history once per drag stroke
+  stepCount:   0,
+  solving:     false,
+  solveTimer:  null,
+  history:     [],       // snapshots for undo
+};
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   History / undo
+═══════════════════════════════════════════════════════════════════════════ */
+function pushHistory() {
+  st.history.push({
+    board:       [...st.board],
+    boardOrigin: [...st.boardOrigin],
+    nnConf:      [...st.nnConf],
+    stepCount:   st.stepCount,
+  });
+}
+
+function undo() {
+  if (st.history.length === 0) {
+    setStatus('Nothing to undo.', 'info'); return;
+  }
+  nnStopAuto();
+  const snap = st.history.pop();
+  st.board       = snap.board;
+  st.boardOrigin = snap.boardOrigin;
+  st.nnConf      = snap.nnConf;
+  st.stepCount   = snap.stepCount;
+  renderBoard();
+  setNNLabel(st.stepCount > 0 ? `step ${st.stepCount}` : 'ready');
+  const left = st.history.length;
+  setStatus(`Undone.${left > 0 ? ` (${left} more undo${left > 1 ? 's' : ''} available)` : ''}`, 'info');
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Build NN state from current board (sent to server)
+═══════════════════════════════════════════════════════════════════════════ */
+function buildNNState() {
+  const state = {};
+  for (const ci of Object.keys(st.clues)) state[parseInt(ci)] = 1;
+  for (let i = 0; i < SIZE; i++) {
+    if (i in st.clues) continue;
+    if (st.board[i] === 1)      state[i] =  1;
+    else if (st.board[i] === 0) state[i] = -1;
+  }
+  return state;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   API
+═══════════════════════════════════════════════════════════════════════════ */
+async function apiFetch(url, opts) {
+  const r = await fetch(url, opts);
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return r.json();
+}
+
+function cluesJson() {
+  const out = {};
+  for (const [k, v] of Object.entries(st.clues)) out[String(k)] = v;
+  return out;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Board rendering
+═══════════════════════════════════════════════════════════════════════════ */
+function buildBoard() {
+  const board = document.getElementById('board');
+  board.innerHTML = '';
+  for (let i = 0; i < SIZE; i++) {
+    const cell = document.createElement('div');
+    cell.id = `cell-${i}`;
+    cell.className = 'cell unknown';
+    cell.addEventListener('mousedown', e => {
+      if (!(i in st.clues) && !st.strokePushed) {
+        pushHistory();
+        st.strokePushed = true;
+      }
+      st.isDrawing = true;
+      onCellInteract(i);
+      e.preventDefault();
+    });
+    cell.addEventListener('mouseenter', () => { if (st.isDrawing) onCellInteract(i); });
+
+    const heat = document.createElement('div');
+    heat.className = 'heat';
+    cell.appendChild(heat);
+
+    const badge = document.createElement('div');
+    badge.className = 'conf-badge';
+    cell.appendChild(badge);
+
+    board.appendChild(cell);
+  }
+  document.addEventListener('mouseup', () => {
+    st.isDrawing = false;
+    st.strokePushed = false;
+  });
+}
+
+function renderBoard() {
+  for (let i = 0; i < SIZE; i++) {
+    const cell  = document.getElementById(`cell-${i}`);
+    const heat  = cell.querySelector('.heat');
+    const badge = cell.querySelector('.conf-badge');
+
+    cell.className = 'cell';
+    badge.textContent = '';
+
+    if (i in st.clues) {
+      cell.classList.add('clue');
+      let span = cell.querySelector('span');
+      if (!span) { span = document.createElement('span'); cell.appendChild(span); }
+      span.textContent = st.clues[i];
+    } else {
+      let span = cell.querySelector('span');
+      if (span) span.textContent = '';
+
+      const v = st.board[i];
+      if (v === 0)      cell.classList.add('black');
+      else if (v === 1) cell.classList.add('white');
+      else              cell.classList.add('unknown');
+
+      // Confidence badge only for NN-placed cells
+      if (st.boardOrigin[i] === 'nn' && st.nnConf[i] !== null) {
+        badge.textContent = `${Math.round(st.nnConf[i] * 200)}%`;
+      }
+    }
+
+    // Heatmap
+    const pBlack = 1.0 - st.nnProbs[i];
+    heat.style.background = `rgba(99,102,241,${Math.min(1, pBlack * 1.2)})`;
+    if (st.showHeat && !(i in st.clues)) cell.classList.add('show-heat');
+  }
+  renderProbGrid();
+}
+
+function renderProbGrid() {
+  const grid = document.getElementById('prob-grid');
+  grid.innerHTML = '';
+  for (let i = 0; i < SIZE; i++) {
+    const div = document.createElement('div');
+    div.className = 'prob-cell';
+    const p = st.nnProbs[i];
+    div.style.background = `rgb(${Math.round(26+(1-p)*10)},${Math.round(31+(1-p)*10)},${Math.round(69+p*180)})`;
+    div.title = `Cell ${i}: P(white)=${(p*100).toFixed(0)}%`;
+    grid.appendChild(div);
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Interaction (user drawing)
+═══════════════════════════════════════════════════════════════════════════ */
+function onCellInteract(i) {
+  if (i in st.clues) return;
+  const prev = st.board[i];
+  if (st.drawMode === 'black')       st.board[i] = 0;
+  else if (st.drawMode === 'white')  st.board[i] = 1;
+  else                               st.board[i] = null;
+
+  if (st.board[i] !== prev) {
+    // Mark as user-placed (overwriting NN origin too)
+    st.boardOrigin[i] = st.board[i] === null ? null : 'user';
+    st.nnConf[i]      = null;
+  }
+  renderBoard();
+}
+
+function setMode(mode) {
+  st.drawMode = mode;
+  ['black', 'white', 'erase'].forEach(m =>
+    document.getElementById(`mode-${m}`).classList.toggle('active', m === mode));
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   New puzzle
+═══════════════════════════════════════════════════════════════════════════ */
+async function newPuzzle() {
+  nnStopAuto();
+  setStatus('<span class="spinner"></span>Generating puzzle…', 'info');
+  document.getElementById('check-details').innerHTML = '';
+  try {
+    const data = await apiFetch('/api/puzzle/new');
+    st.clues       = {};
+    for (const [k, v] of Object.entries(data.clues)) st.clues[parseInt(k)] = v;
+    st.solution    = data.solution;
+    st.board       = new Array(SIZE).fill(null);
+    st.boardOrigin = new Array(SIZE).fill(null);
+    st.nnConf      = new Array(SIZE).fill(null);
+    st.history     = [];
+    st.stepCount   = 0;
+    if (data.brain) {
+      st.nnProbs = data.brain.probs;
+      st.brain   = data.brain;
+      drawBrain(data.brain);
+    }
+    renderBoard();
+    setNNLabel('ready');
+    setStatus('New puzzle — draw cells yourself, use "→ Step" for one NN move, or "▶ Auto Solve" to run to the end.', 'info');
+  } catch (e) {
+    setStatus('Failed: ' + e.message, 'error');
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   NN Solve — iterative, one step per API call
+═══════════════════════════════════════════════════════════════════════════ */
+
+function nnReset() {
+  nnStopAuto();
+  pushHistory();
+  // Clear only NN-placed cells, leave user-placed intact
+  for (let i = 0; i < SIZE; i++) {
+    if (st.boardOrigin[i] === 'nn') {
+      st.board[i]       = null;
+      st.boardOrigin[i] = null;
+      st.nnConf[i]      = null;
+    }
+  }
+  st.stepCount = 0;
+  st.nnProbs   = new Array(SIZE).fill(0.5);
+  renderBoard();
+  renderProbGrid();
+  setNNLabel('ready');
+  setStatus('NN moves cleared. User-drawn cells kept.', 'info');
+}
+
+// One step of iterative NN solving — uses ALL placed cells (user + NN) as input
+async function nnStep() {
+  if (Object.keys(st.clues).length === 0) {
+    setStatus('Load a puzzle first.', 'error'); return;
+  }
+
+  const nnState    = buildNNState();
+  const unknownCount = SIZE - Object.keys(nnState).length;
+  if (unknownCount === 0) {
+    nnStopAuto();
+    setStatus('All cells filled — nothing left to solve.', 'info');
+    setNNLabel('done');
+    compareToGroundTruth();
+    return;
+  }
+
+  try {
+    const data = await apiFetch('/api/puzzle/step', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ clues: cluesJson(), state: nnState }),
+    });
+
+    if (data.done && data.cell === undefined) {
+      nnStopAuto();
+      setNNLabel('done');
+      compareToGroundTruth();
+      return;
+    }
+
+    const cell  = data.cell;
+    const value = data.value;
+    const conf  = data.confidence;
+
+    // Push history before placing the cell
+    pushHistory();
+
+    if (!(cell in st.clues)) {
+      st.board[cell]       = value;
+      st.boardOrigin[cell] = 'nn';
+      st.nnConf[cell]      = conf;
+    }
+
+    st.nnProbs = data.probs;
+    st.stepCount++;
+
+    const newState   = buildNNState();
+    const remaining  = SIZE - Object.keys(newState).length;
+    setNNLabel(`step ${st.stepCount} — conf ${(conf * 200).toFixed(0)}% — ${remaining} left`);
+
+    renderBoard();
+    renderProbGrid();
+
+    if (data.done || remaining === 0) {
+      nnStopAuto();
+      setNNLabel(`done in ${st.stepCount} steps`);
+      setStatus(`NN finished in ${st.stepCount} steps.`, 'info');
+      compareToGroundTruth();
+    }
+  } catch (e) {
+    nnStopAuto();
+    setStatus('Step failed: ' + e.message, 'error');
+  }
+}
+
+// Auto-solve: run steps with delay so you can watch
+function nnAutoSolve() {
+  if (st.solving) {
+    nnStopAuto();
+    return;
+  }
+  if (Object.keys(st.clues).length === 0) {
+    setStatus('Load a puzzle first.', 'error'); return;
+  }
+  st.solving = true;
+  document.getElementById('btn-auto').textContent = '⏸ Pause';
+
+  async function runLoop() {
+    const nnState      = buildNNState();
+    const unknownCount = SIZE - Object.keys(nnState).length;
+    if (!st.solving || unknownCount === 0) {
+      nnStopAuto();
+      return;
+    }
+    await nnStep();
+    if (st.solving) {
+      st.solveTimer = setTimeout(runLoop, 180);
+    }
+  }
+  runLoop();
+}
+
+function nnStopAuto() {
+  st.solving = false;
+  clearTimeout(st.solveTimer);
+  document.getElementById('btn-auto').textContent = '▶ Auto Solve';
+}
+
+function setNNLabel(text) {
+  document.getElementById('nn-step-label').textContent = `NN: ${text}`;
+}
+
+function compareToGroundTruth() {
+  if (!st.solution) return;
+  let correct = 0;
+  for (let i = 0; i < SIZE; i++) {
+    const v = i in st.clues ? 1 : (st.board[i] !== null ? st.board[i] : 0);
+    if (v === st.solution[i]) correct++;
+  }
+  const solved = correct === SIZE;
+  setStatus(
+    solved
+      ? `🎉 NN solved the puzzle perfectly! (${correct}/${SIZE} cells correct)`
+      : `NN finished: ${correct}/${SIZE} cells correct — not a perfect solve`,
+    solved ? 'ok' : 'info'
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Reveal ground truth
+═══════════════════════════════════════════════════════════════════════════ */
+function revealSolution() {
+  if (!st.solution) { setStatus('Load a puzzle first.', 'error'); return; }
+  nnStopAuto();
+  pushHistory();
+  for (let i = 0; i < SIZE; i++) {
+    if (!(i in st.clues)) {
+      st.board[i]       = st.solution[i];
+      st.boardOrigin[i] = 'user';
+      st.nnConf[i]      = null;
+    }
+  }
+  renderBoard();
+  setStatus('Ground truth solution revealed.', 'info');
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Clear
+═══════════════════════════════════════════════════════════════════════════ */
+function clearBoard() {
+  nnStopAuto();
+  pushHistory();
+  st.board       = new Array(SIZE).fill(null);
+  st.boardOrigin = new Array(SIZE).fill(null);
+  st.nnConf      = new Array(SIZE).fill(null);
+  st.nnProbs     = new Array(SIZE).fill(0.5);
+  st.stepCount   = 0;
+  document.getElementById('check-details').innerHTML = '';
+  document.querySelectorAll('.cell').forEach(c => c.classList.remove('violation'));
+  setNNLabel('ready');
+  renderBoard();
+  setStatus('Board cleared.', 'info');
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Check user solution
+═══════════════════════════════════════════════════════════════════════════ */
+async function checkSolution() {
+  if (Object.keys(st.clues).length === 0) {
+    setStatus('Load a puzzle first.', 'error'); return;
+  }
+  const sol = Array.from({length: SIZE}, (_, i) => {
+    if (i in st.clues) return 1;
+    return st.board[i] === null ? 0 : st.board[i];
+  });
+
+  setStatus('<span class="spinner"></span>Checking…', 'info');
+  try {
+    const data = await apiFetch('/api/puzzle/check', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ clues: cluesJson(), solution: sol }),
+    });
+
+    document.querySelectorAll('.cell').forEach(c => c.classList.remove('violation'));
+    const details = document.getElementById('check-details');
+    const tick = ok => ok ? '<span class="check-ok">✓</span>' : '<span class="check-err">✗</span>';
+    details.innerHTML = `
+      ${tick(data.no_pools)}        No 2×2 black pools<br>
+      ${tick(data.river_connected)} River is one connected group<br>
+      ${tick(data.islands_ok)}      Islands match clue sizes &amp; don't touch<br>
+    `;
+    setStatus(data.valid ? '🎉 Correct! Perfect solution!' : 'Not quite. See rule checks below.', data.valid ? 'ok' : 'error');
+  } catch (e) {
+    setStatus('Check failed: ' + e.message, 'error');
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Heatmap toggle
+═══════════════════════════════════════════════════════════════════════════ */
+function toggleHeat() {
+  st.showHeat = !st.showHeat;
+  document.getElementById('heat-btn').textContent =
+    st.showHeat ? 'Hide NN Heatmap' : 'Show NN Heatmap';
+  renderBoard();
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Status helper
+═══════════════════════════════════════════════════════════════════════════ */
+function setStatus(msg, type = 'info') {
+  const el = document.getElementById('status');
+  el.innerHTML = msg;
+  el.className = type;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Brain canvas
+═══════════════════════════════════════════════════════════════════════════ */
+function drawBrain(brain) {
+  const canvas = document.getElementById('brain-canvas');
+  const ctx    = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+  ctx.clearRect(0, 0, W, H);
+  if (!brain) return;
+
+  const cols   = [30, 110, 190, 270];
+  const labels = ['Input\n(50)', 'Hidden1\n(256)', 'Hidden2\n(256)', 'Output\n(25)'];
+  const N_SHOW = 20;
+
+  function sample(arr) {
+    if (!arr || arr.length === 0) return [];
+    if (arr.length <= N_SHOW) return arr;
+    const step = arr.length / N_SHOW;
+    return Array.from({length: N_SHOW}, (_, i) => arr[Math.floor(i * step)]);
+  }
+
+  const layers = [
+    sample(brain.inputs),
+    sample(brain.hidden1 || []),
+    sample(brain.hidden2 || []),
+    sample(brain.probs),
+  ];
+
+  function yPositions(n) {
+    const spacing = Math.min(18, (H - 60) / Math.max(n - 1, 1));
+    const totalH  = spacing * (n - 1);
+    const startY  = (H - totalH) / 2;
+    return Array.from({length: n}, (_, i) => startY + i * spacing);
+  }
+
+  const yss = layers.map(l => yPositions(l.length));
+
+  // Connections
+  ctx.lineWidth = .4;
+  for (let li = 0; li < cols.length - 1; li++) {
+    const x1 = cols[li], x2 = cols[li + 1];
+    const ys1 = yss[li], ys2 = yss[li + 1];
+    for (let a = 0; a < ys1.length; a += 2) {
+      for (let b = 0; b < ys2.length; b += 3) {
+        const v = (layers[li][a] + 1) / 2;
+        ctx.strokeStyle = `rgba(99,102,241,${v * .25})`;
+        ctx.beginPath();
+        ctx.moveTo(x1 + 7, ys1[a]);
+        ctx.lineTo(x2 - 7, ys2[b]);
+        ctx.stroke();
+      }
+    }
+  }
+
+  // Neurons
+  for (let li = 0; li < cols.length; li++) {
+    const x    = cols[li];
+    const vals = layers[li];
+    const ys   = yss[li];
+    for (let ni = 0; ni < vals.length; ni++) {
+      const v = li === cols.length - 1
+        ? vals[ni]
+        : Math.max(0, Math.min(1, (vals[ni] + 1) / 2));
+      ctx.fillStyle = `rgb(${Math.round(30+v*69)},${Math.round(30+v*72)},${Math.round(150+v*91)})`;
+      ctx.beginPath();
+      ctx.arc(x, ys[ni], 5, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  // Labels
+  ctx.font = '10px system-ui';
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#94a3b8';
+  labels.forEach((lbl, i) => {
+    lbl.split('\n').forEach((line, j) => {
+      ctx.fillText(line, cols[i], H - 16 + j * 12);
+    });
+  });
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Init
+═══════════════════════════════════════════════════════════════════════════ */
+buildBoard();
+newPuzzle();
+</script>
+</body>
+</html>
