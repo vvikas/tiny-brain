@@ -234,15 +234,15 @@ def train(
     phase1_episodes=10000,
     phase2_episodes=20000,
     lr=0.01,
+    lr_phase2=0.002,   # lower LR for Phase 2: fine-tune without overwriting Phase 1
     eval_every=1000,
     save_path=AGENT_SAVE_PATH,
 ):
     print("=" * 60)
     print("tiny-brain TicTacToe — REINFORCE Training")
     print("=" * 60)
-    print(f"Phase 1: {phase1_episodes} episodes vs random (alternates X/O)")
-    print(f"Phase 2: {phase2_episodes} episodes of symmetric self-play (alternates X/O)")
-    print(f"Learning rate: {lr}")
+    print(f"Phase 1: {phase1_episodes} episodes vs random (alternates X/O), lr={lr}")
+    print(f"Phase 2: {phase2_episodes} episodes of symmetric self-play (alternates X/O), lr={lr_phase2}")
     print("Enhancements: perspective-flipped board + tactical reward shaping")
     print()
 
@@ -285,7 +285,7 @@ def train(
         # Alternate roles each episode — same single-agent design as Phase 1
         agent_player = 1 if (ep % 2 == 1) else -1
         reward, mean_reward = play_episode_vs_frozen(
-            agent, frozen, game, lr, mean_reward, agent_player
+            agent, frozen, game, lr_phase2, mean_reward, agent_player
         )
         win_history.append(1 if reward > 0 else 0)
 
