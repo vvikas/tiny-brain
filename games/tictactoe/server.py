@@ -43,7 +43,8 @@ def load_agent():
 agent = load_agent()
 game  = TicTacToe()
 
-HUMAN_PLAYER = -1   # human is always O; AI is always X
+# human_player: 1 = human plays X (goes first), -1 = human plays O (AI goes first)
+human_player = -1
 
 
 # ── Helper ────────────────────────────────────────────────────────────── #
@@ -57,7 +58,7 @@ def game_response(brain=None, extra=None):
         "current_player": game.current_player,
         "valid_moves":    game.get_valid_moves(),
         "brain":          brain,
-        "human_player":   HUMAN_PLAYER,
+        "human_player":   human_player,
     }
     if extra:
         payload.update(extra)
@@ -92,10 +93,19 @@ def index():
 
 @app.route('/api/new_game')
 def new_game():
-    # AI always goes first as X; human is always O
+    global human_player
+    # ?human=X → human goes first as X; anything else → AI goes first as X
+    human_player = 1 if request.args.get('human') == 'X' else -1
+
     game.reset()
-    result, action, brain_before = ai_move()
-    return game_response(brain=brain_before, extra={"result": result, "ai_move": action})
+
+    if human_player == -1:
+        # AI (X=1) plays first
+        result, action, brain_before = ai_move()
+        return game_response(brain=brain_before, extra={"result": result, "ai_move": action})
+    else:
+        # Human (X=1) plays first — board is empty, no brain yet
+        return game_response(brain=None, extra={"result": "ongoing", "ai_move": None})
 
 
 @app.route('/api/move', methods=['POST'])
@@ -106,7 +116,7 @@ def move():
     if pos not in game.get_valid_moves():
         return jsonify({"error": "Invalid move"}), 400
 
-    if game.current_player != HUMAN_PLAYER:
+    if game.current_player != human_player:
         return jsonify({"error": "Not your turn"}), 400
 
     # Human move

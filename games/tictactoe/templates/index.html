@@ -186,11 +186,12 @@
     <div id="prob-grid"></div>
 
     <div id="buttons">
-      <button class="primary" id="btn-new-game">New Game</button>
+      <button class="primary" id="btn-ai-first">AI goes first (you are O)</button>
+      <button id="btn-human-first">I go first (I am X)</button>
     </div>
 
     <div id="legend">
-      You are O · AI is X<br/>
+      <span id="role-label">You are O · AI is X</span><br/>
       Click a cell to play<br/>
       Heatmap = AI wants that cell
     </div>
@@ -497,15 +498,28 @@ function applyState(data) {
 /* ═══════════════════════════════════════════════════════════════════════ *
  *  Game actions                                                           *
  * ═══════════════════════════════════════════════════════════════════════ */
-const humanPlayer = -1;   // always O — AI is always X and goes first
+let humanPlayer = -1;   // -1 = O (default), 1 = X
 
-async function newGame() {
+const roleLabel = document.getElementById('role-label');
+
+async function newGame(humanGoesFirst = false) {
   gameOver = false;
   statusEl.textContent = 'Starting…';
+  const param = humanGoesFirst ? '?human=X' : '';
   try {
-    const data = await apiFetch('/api/new_game');
+    const data = await apiFetch(`/api/new_game${param}`);
+    humanPlayer = data.human_player;
     applyState(data);
-    statusEl.textContent = 'Your turn — you are O';
+
+    const symbol   = humanPlayer === 1 ? 'X' : 'O';
+    const aiSymbol = humanPlayer === 1 ? 'O' : 'X';
+    roleLabel.textContent = `You are ${symbol} · AI is ${aiSymbol}`;
+
+    if (humanPlayer === 1) {
+      statusEl.textContent = 'Your turn — you are X (go first!)';
+    } else {
+      statusEl.textContent = 'Your turn — you are O';
+    }
   } catch (e) {
     statusEl.textContent = 'Error: ' + e.message;
   }
@@ -536,7 +550,8 @@ async function humanMove(pos) {
       gameOver = true;
       statusEl.textContent = "It's a draw!";
     } else {
-      statusEl.textContent = 'Your turn — you are O';
+      const symbol = humanPlayer === 1 ? 'X' : 'O';
+      statusEl.textContent = `Your turn — you are ${symbol}`;
     }
   } catch (e) {
     statusEl.textContent = 'Error: ' + e.message;
@@ -546,12 +561,13 @@ async function humanMove(pos) {
 /* ═══════════════════════════════════════════════════════════════════════ *
  *  Wire up buttons                                                        *
  * ═══════════════════════════════════════════════════════════════════════ */
-document.getElementById('btn-new-game').addEventListener('click', () => newGame());
+document.getElementById('btn-ai-first').addEventListener('click',    () => newGame(false));
+document.getElementById('btn-human-first').addEventListener('click', () => newGame(true));
 
 /* ═══════════════════════════════════════════════════════════════════════ *
  *  Boot                                                                   *
  * ═══════════════════════════════════════════════════════════════════════ */
-newGame();
+newGame(false);
 </script>
 </body>
 </html>
